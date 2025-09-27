@@ -64,7 +64,7 @@ const baseProjectSchema = z.object({
 const fileSchema = z
   .instanceof(File)
   .refine((file) => file.size > 0, 'File is required.')
-  .refine((file) => file.size <= 5 * 1024 * 1024, `Max file size is 5MB.`)
+  .refine((file) => file.size <= 25 * 1024 * 1024, `Max file size is 25MB.`)
   .refine(
     (file) => ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'].includes(file.type),
     'Only .jpg, .jpeg, .png and .webp formats are supported.'
