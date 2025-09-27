@@ -19,6 +19,7 @@ function ProjectsGridSkeleton() {
   );
 }
 
+// Trigger redeploy
 export default async function Home() {
   const projects = await getProjects();
 
