@@ -14,43 +14,40 @@ import {
 } from './db';
 import type { Project, PhotographyImage } from './definitions';
 import { generateProjectThumbnail } from '@/ai/flows/generate-project-thumbnail';
-import { put, del } from '@vercel/blob';
+import { supabase } from './supabase-client';
 
 // --- File Handling Utility ---
 async function saveFile(file: File, folder: string): Promise<string> {
-  if (!process.env.BLOB_READ_WRITE_TOKEN) {
-    throw new Error(
-      'Vercel Blob token not found. File operations are disabled in local development without it.'
-    );
-  }
   if (!file) {
     throw new Error('No file provided to save.');
   }
   const fileExtension = file.name.split('.').pop();
   const fileName = `${folder}/${crypto.randomBytes(16).toString('hex')}.${fileExtension}`;
 
-  const blob = await put(fileName, file, {
-    access: 'public',
-  });
+  const { data, error } = await supabase.storage.from(folder).upload(fileName, file);
+  
+  if (error) {
+    throw new Error(`Supabase storage error: ${error.message}`);
+  }
 
-  return blob.url;
+  const { data: { publicUrl } } = supabase.storage.from(folder).getPublicUrl(fileName);
+  return publicUrl;
 }
 
 async function deleteFile(fileUrl: string): Promise<void> {
-  if (!process.env.BLOB_READ_WRITE_TOKEN) {
-    console.log(
-      'Vercel Blob token not found. File deletion is disabled in local development without it.'
-    );
-    return;
-  }
   if (!fileUrl) return;
   try {
-    await del(fileUrl);
-  } catch (error: any) {
-    // Vercel Blob's del throws an error if the file doesn't exist, so we can ignore not found errors.
-    if (error.code !== 'not_found') {
-        console.error(`Failed to delete file at ${fileUrl}:`, error);
+    const url = new URL(fileUrl);
+    const pathParts = url.pathname.split('/');
+    // The path is typically /storage/v1/object/public/bucket-name/folder/file.name
+    const bucket = pathParts[4];
+    const filePath = pathParts.slice(5).join('/');
+    
+    if (bucket && filePath) {
+      await supabase.storage.from(bucket).remove([filePath]);
     }
+  } catch (error: any) {
+    console.error(`Failed to delete file at ${fileUrl}:`, error);
   }
 }
 
@@ -150,7 +147,7 @@ async function saveFilmProject(formData: FormData) {
         if (existingProject?.stills) {
           await Promise.all(existingProject.stills.map(url => deleteFile(url)));
         }
-        newStillsUrls = await Promise.all(stillFiles.map(file => saveFile(file, `stills/${projectId}`)));
+        newStillsUrls = await Promise.all(stillFiles.map(file => saveFile(file, `stills`)));
     }
 
     const projectData: Project = {
@@ -200,13 +197,13 @@ async function saveColorGradingProject(formData: FormData) {
         const beforeFile = formData.get('beforeImage') as File;
         if (beforeFile && beforeFile.size > 0) {
             if (beforeUrl) await deleteFile(beforeUrl);
-            beforeUrl = await saveFile(beforeFile, `color-grading/${projectId}`);
+            beforeUrl = await saveFile(beforeFile, `color-grading`);
         }
 
         const afterFile = formData.get('afterImage') as File;
         if (afterFile && afterFile.size > 0) {
             if (afterUrl) await deleteFile(afterUrl);
-            afterUrl = await saveFile(afterFile, `color-grading/${projectId}`);
+            afterUrl = await saveFile(afterFile, `color-grading`);
         }
 
         if (!id && (!beforeFile || beforeFile.size === 0 || !afterFile || afterFile.size === 0)) {
@@ -218,7 +215,7 @@ async function saveColorGradingProject(formData: FormData) {
             id: projectId,
             beforeImageUrl: beforeUrl,
             afterImageUrl: afterUrl,
-            thumbnail: afterUrl || beforeUrl, // Use after image as thumbnail
+            thumbnail: afterUrl || beforeUrl || '',
         };
 
         await dbSaveProject(projectData);
@@ -239,7 +236,7 @@ export async function deleteProject(formData: FormData) {
   try {
     const project = await getProjectById(id);
     if(project) {
-        // Delete associated files from Vercel Blob
+        // Delete associated files from Supabase Storage
         const filesToDelete: (string | undefined)[] = [];
         filesToDelete.push(project.thumbnail);
         filesToDelete.push(project.beforeImageUrl);
@@ -254,9 +251,7 @@ export async function deleteProject(formData: FormData) {
     }
     await deleteProjectById(id);
   } catch (e) {
-    // handle error
     console.error("Failed to delete project:", e)
-    // We can show an error to the user here if needed
   }
   revalidatePath('/admin');
   revalidatePath('/');

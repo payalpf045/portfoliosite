@@ -30,7 +30,7 @@ const nextConfig: NextConfig = {
       },
       {
         protocol: 'https',
-        hostname: '*.public.blob.vercel-storage.com',
+        hostname: 'ojnerbyocqmihdrggvzp.supabase.co',
         port: '',
         pathname: '/**',
       }
