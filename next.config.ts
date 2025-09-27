@@ -43,11 +43,12 @@ pathname: '/**',
   },
   // This is deprecated in Next.js 15 and functions is the new way
   // Keeping both for compatibility with different Vercel build versions
+  serverActions: {
+    maxDuration: 120,
+  },
   functions: {
       maxDuration: 120,
   }
 };
 
 export default nextConfig;
-
-    

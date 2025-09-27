@@ -66,16 +66,12 @@ export async function saveProject(formData: FormData) {
 
     let projectData: Partial<Project>;
     
+    const rawFormData = Object.fromEntries(formData.entries());
+
     if (category === 'Film') {
       const validatedFields = filmSchema.safeParse({
-        id: id,
-        title: formData.get('title'),
-        description: formData.get('description'),
-        date: formData.get('date'),
+        ...rawFormData,
         category: 'Film',
-        youtubeVideoId: formData.get('youtubeVideoId') || undefined,
-        thumbnail: formData.get('thumbnail'),
-        stills: formData.get('stills'),
       });
       if (!validatedFields.success) {
         console.error(validatedFields.error.flatten().fieldErrors);
@@ -84,20 +80,14 @@ export async function saveProject(formData: FormData) {
       projectData = validatedFields.data;
     } else if (category === 'Color Grading') {
       const validatedFields = colorGradingSchema.safeParse({
-        id: id,
-        title: formData.get('title'),
-        description: formData.get('description'),
-        date: formData.get('date'),
+        ...rawFormData,
         category: 'Color Grading',
-        beforeImageUrl: formData.get('beforeImageUrl'),
-        afterImageUrl: formData.get('afterImageUrl'),
-        thumbnail: formData.get('thumbnail'),
       });
       if (!validatedFields.success) {
         console.error(validatedFields.error.flatten().fieldErrors);
         throw new Error('Color Grading project validation failed: ' + JSON.stringify(validatedFields.error.flatten().fieldErrors));
       }
-      projectData = { ...validatedFields.data, thumbnail: formData.get('thumbnail') as string || '' };
+      projectData = validatedFields.data;
     } else {
       throw new Error('Invalid project category');
     }
@@ -272,5 +262,3 @@ export async function createSignedUploadUrl(path: string, bucket: string, conten
     return { error: 'Failed to create signed URL: ' + error.message };
   }
 }
-
-    

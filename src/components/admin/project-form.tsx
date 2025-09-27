@@ -54,7 +54,6 @@ async function uploadFileWithProgress(
       if (xhr.status === 200) {
         onProgress(100);
         // 3. Construct the public URL manually after successful upload.
-        // Note: The public URL structure depends on your Supabase project settings.
         const publicUrl = `${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/${bucket}/${filePath}`;
         resolve(publicUrl);
       } else {
@@ -131,7 +130,7 @@ export default function ProjectForm({ project }: ProjectFormProps) {
     }
   };
 
-  const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
+  const handleFormSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     if (isSubmitting) return;
 
@@ -140,6 +139,9 @@ export default function ProjectForm({ project }: ProjectFormProps) {
     setUploadMessage('Starting upload...');
     
     try {
+      const formEl = formRef.current!;
+      if (!formEl) return;
+
       let uploadedThumbnailUrl = project?.thumbnail || '';
       let uploadedStillsUrls = project?.stills || [];
       let uploadedBeforeImageUrl = project?.beforeImageUrl || '';
@@ -150,10 +152,10 @@ export default function ProjectForm({ project }: ProjectFormProps) {
           return await uploadFileWithProgress(file, bucket, (p) => setUploadProgress(p));
       };
       
-      const tasks: { run: () => Promise<string>, assign: (url: string) => void }[] = [];
+      const uploadTasks: { run: () => Promise<string>, assign: (url: string) => void }[] = [];
 
       if (aiGeneratedThumbnail && aiGeneratedThumbnail !== project?.thumbnail) {
-          tasks.push({
+          uploadTasks.push({
             run: async () => {
               setUploadMessage('Uploading AI thumbnail...');
               const response = await fetch(aiGeneratedThumbnail);
@@ -164,7 +166,7 @@ export default function ProjectForm({ project }: ProjectFormProps) {
             assign: (url) => uploadedThumbnailUrl = url,
           });
       } else if (thumbnailFile) {
-          tasks.push({
+          uploadTasks.push({
             run: createUploadTask(thumbnailFile, 'project-thumbnails', 'Uploading thumbnail...'),
             assign: (url) => uploadedThumbnailUrl = url
           });
@@ -174,7 +176,7 @@ export default function ProjectForm({ project }: ProjectFormProps) {
         uploadedStillsUrls = []; // Clear old stills if new ones are uploaded
         for (let i = 0; i < stillsFiles.length; i++) {
           const file = stillsFiles[i];
-          tasks.push({
+          uploadTasks.push({
             run: createUploadTask(file, 'stills', `Uploading still ${i + 1}/${stillsFiles.length}...`),
             assign: (url) => uploadedStillsUrls.push(url),
           });
@@ -182,20 +184,20 @@ export default function ProjectForm({ project }: ProjectFormProps) {
       }
 
       if (beforeImageFile) {
-        tasks.push({
+        uploadTasks.push({
           run: createUploadTask(beforeImageFile, 'color-grading', 'Uploading before image...'),
           assign: (url) => uploadedBeforeImageUrl = url,
         });
       }
 
       if (afterImageFile) {
-        tasks.push({
+        uploadTasks.push({
           run: createUploadTask(afterImageFile, 'color-grading', 'Uploading after image...'),
           assign: (url) => uploadedAfterImageUrl = url,
         });
       }
 
-      for (const task of tasks) {
+      for (const task of uploadTasks) {
           const url = await task.run();
           task.assign(url);
           setUploadProgress(0); // Reset progress for next file
@@ -204,23 +206,14 @@ export default function ProjectForm({ project }: ProjectFormProps) {
       setUploadMessage('Saving project details...');
       setUploadProgress(100);
       
-      const formEl = formRef.current!;
-      const serverFormData = new FormData();
-      serverFormData.append('id', project?.id || '');
-      serverFormData.append('title', (formEl.elements.namedItem('title') as HTMLInputElement).value);
-      serverFormData.append('description', (formEl.elements.namedItem('description') as HTMLTextAreaElement).value);
-      serverFormData.append('date', (formEl.elements.namedItem('date') as HTMLInputElement).value);
-      serverFormData.append('category', category);
-      
-      // Ensure required fields for each category have a value, even if empty
-      serverFormData.append('thumbnail', uploadedThumbnailUrl);
-      serverFormData.append('beforeImageUrl', uploadedBeforeImageUrl);
-      serverFormData.append('afterImageUrl', uploadedAfterImageUrl);
-      serverFormData.append('stills', JSON.stringify(uploadedStillsUrls));
-
-      if (category === 'Film') {
-        serverFormData.append('youtubeVideoId', (formEl.elements.namedItem('youtubeVideoId') as HTMLInputElement)?.value || '');
-      }
+      // Use FormData to send data to the server action
+      const serverFormData = new FormData(formEl);
+      serverFormData.set('id', project?.id || '');
+      serverFormData.set('thumbnail', uploadedThumbnailUrl);
+      serverFormData.set('beforeImageUrl', uploadedBeforeImageUrl);
+      serverFormData.set('afterImageUrl', uploadedAfterImageUrl);
+      serverFormData.set('stills', JSON.stringify(uploadedStillsUrls));
+      // The other form fields (title, desc, etc.) are already in serverFormData
 
       const result = await saveProject(serverFormData);
 
@@ -242,10 +235,10 @@ export default function ProjectForm({ project }: ProjectFormProps) {
   };
 
   return (
-    <form ref={formRef} onSubmit={handleSubmit}>
+    <form ref={formRef} onSubmit={handleFormSubmit}>
       <Card>
         <CardContent className="p-6 space-y-6">
-          {project && <input type="hidden" name="id" value={project.id} />}
+          <input type="hidden" name="id" defaultValue={project?.id} />
           
           <div className="space-y-2">
             <Label htmlFor="title">Title</Label>
@@ -355,5 +348,3 @@ export default function ProjectForm({ project }: ProjectFormProps) {
     </form>
   );
 }
-
-    
