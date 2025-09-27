@@ -2,7 +2,6 @@
 
 import { z } from 'zod';
 import { revalidatePath } from 'next/cache';
-import crypto from 'crypto';
 import {
   saveProject as dbSaveProject,
   deleteProjectById,
@@ -21,15 +20,15 @@ async function deleteFile(fileUrl: string): Promise<void> {
   try {
     const url = new URL(fileUrl);
     const pathParts = url.pathname.split('/');
-    // The path is typically /storage/v1/object/public/bucket-name/folder/file.name
     const bucket = pathParts[4];
     const filePath = pathParts.slice(5).join('/');
     
     if (bucket && filePath) {
-      await supabase.storage.from(bucket).remove([filePath]);
+      const { error } = await supabase.storage.from(bucket).remove([filePath]);
+      if (error) throw error;
     }
   } catch (error: any) {
-    console.error(`Failed to delete file at ${fileUrl}:`, error);
+    console.error(`Failed to delete file at ${fileUrl}:`, error.message);
   }
 }
 
@@ -61,12 +60,10 @@ export async function saveProject(formData: FormData) {
   try {
     const category = formData.get('category') as Project['category'];
     const id = formData.get('id') as string | undefined;
-    const projectId = id || crypto.randomBytes(8).toString('hex');
+    const projectId = id || crypto.randomUUID();
 
     let projectData: Partial<Project>;
-
-    const stillsValue = formData.get('stills');
-
+    
     if (category === 'Film') {
       const validatedFields = filmSchema.safeParse({
         id: id,
@@ -76,11 +73,11 @@ export async function saveProject(formData: FormData) {
         category: 'Film',
         youtubeVideoId: formData.get('youtubeVideoId') || undefined,
         thumbnail: formData.get('thumbnail'),
-        stills: stillsValue,
+        stills: formData.get('stills'),
       });
       if (!validatedFields.success) {
         console.error(validatedFields.error.flatten().fieldErrors);
-        throw new Error('Film project validation failed');
+        throw new Error('Film project validation failed: ' + JSON.stringify(validatedFields.error.flatten().fieldErrors));
       }
       projectData = validatedFields.data;
     } else if (category === 'Color Grading') {
@@ -95,7 +92,7 @@ export async function saveProject(formData: FormData) {
       });
       if (!validatedFields.success) {
         console.error(validatedFields.error.flatten().fieldErrors);
-        throw new Error('Color Grading project validation failed');
+        throw new Error('Color Grading project validation failed: ' + JSON.stringify(validatedFields.error.flatten().fieldErrors));
       }
       projectData = { ...validatedFields.data, thumbnail: formData.get('thumbnail') as string || '' };
     } else {
@@ -130,7 +127,7 @@ export async function saveProject(formData: FormData) {
     revalidatePath('/admin');
     revalidatePath('/');
     revalidatePath('/film');
-    revalidatePath('/color-grading');
+revalidatePath('/color-grading');
     revalidatePath(`/project/${projectId}`);
     
     return { success: true, message: 'Project saved successfully.' };
@@ -197,7 +194,7 @@ export async function savePhotographyImage(prevState: any, formData: FormData) {
     const { image: imageFile, title } = validatedFields.data;
 
     const fileExtension = imageFile.name.split('.').pop();
-    const fileName = `photography/${crypto.randomBytes(16).toString('hex')}.${fileExtension}`;
+    const fileName = `photography/${crypto.randomUUID()}.${fileExtension}`;
     
     try {
         const { error: uploadError } = await supabase.storage.from('photography').upload(fileName, imageFile);
@@ -206,7 +203,7 @@ export async function savePhotographyImage(prevState: any, formData: FormData) {
         const { data: { publicUrl } } = supabase.storage.from('photography').getPublicUrl(fileName);
 
         const imageData: PhotographyImage = {
-            id: crypto.randomBytes(8).toString('hex'),
+            id: crypto.randomUUID(),
             url: publicUrl,
             title: title,
             date: new Date().toISOString(),
@@ -227,7 +224,7 @@ export async function deletePhotographyImage(formData: FormData) {
   if (!id) return;
   try {
     const image = await getPhotographyImageById(id);
-    if (image && image.url) {
+if (image && image.url) {
       await deleteFile(image.url);
     }
     await deletePhotographyImageById(id);
@@ -253,4 +250,21 @@ export async function generateThumbnailAction(description: string, referenceImag
         console.error('AI thumbnail generation failed:', error);
         return { error: 'Failed to generate AI thumbnail.' };
     }
+}
+
+// --- Signed URL Action ---
+export async function createSignedUploadUrl(path: string, bucket: string, contentType: string) {
+  try {
+    const { data, error } = await supabase.storage
+      .from(bucket)
+      .createSignedUploadUrl(path);
+
+    if (error) {
+      throw error;
+    }
+    
+    return { signedUrl: data.signedUrl };
+  } catch (error: any) {
+    return { error: 'Failed to create signed URL: ' + error.message };
+  }
 }

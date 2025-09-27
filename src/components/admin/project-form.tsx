@@ -4,7 +4,7 @@ import { useState, useTransition, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { useToast } from '@/hooks/use-toast';
 import { Project } from '@/lib/definitions';
-import { saveProject, generateThumbnailAction } from '@/lib/actions';
+import { saveProject, generateThumbnailAction, createSignedUploadUrl } from '@/lib/actions';
 import { Card, CardContent, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
 import { Label } from '@/components/ui/label';
 import { Input } from '@/components/ui/input';
@@ -17,65 +17,57 @@ import { fileToDataUri } from '@/lib/utils';
 import { Sparkles } from 'lucide-react';
 import { Progress } from '@/components/ui/progress';
 import { supabase } from '@/lib/supabase-client';
-import crypto from 'crypto';
 
 interface ProjectFormProps {
   project?: Project;
 }
 
-// True client-side direct upload function with real progress tracking
+// True client-side direct upload function with real progress tracking using Signed URLs
 async function uploadFileWithProgress(
   file: File,
   bucket: string,
   onProgress: (percentage: number) => void
 ): Promise<string> {
-    const fileExtension = file.name.split('.').pop();
-    const fileName = `${crypto.randomBytes(16).toString('hex')}.${fileExtension}`;
-    const filePath = `${fileName}`;
+  const fileExtension = file.name.split('.').pop();
+  const fileName = `${crypto.randomUUID()}.${fileExtension}`;
+  const filePath = `${fileName}`;
 
-    return new Promise((resolve, reject) => {
-        const { data: { publicUrl } } = supabase.storage.from(bucket).getPublicUrl(filePath);
+  // 1. Get a signed URL from our server action
+  const { signedUrl, error } = await createSignedUploadUrl(filePath, bucket, file.type);
+  if (error || !signedUrl) {
+    throw new Error(error || 'Could not get signed URL');
+  }
 
-        const xhr = new XMLHttpRequest();
-        xhr.open('POST', publicUrl, true);
+  // 2. Use XMLHttpRequest to upload the file to the signed URL and track progress
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('PUT', signedUrl, true);
+    xhr.setRequestHeader('Content-Type', file.type);
 
-        // Get the upload URL from Supabase
-        supabase.storage.from(bucket).createSignedUploadUrl(filePath)
-            .then(({ data, error }) => {
-                if (error || !data) {
-                    return reject(error || new Error('Could not get signed URL'));
-                }
-                const signedUrl = data.signedUrl;
+    xhr.upload.onprogress = (event) => {
+      if (event.lengthComputable) {
+        const percentage = (event.loaded / event.total) * 100;
+        onProgress(percentage);
+      }
+    };
 
-                const uploadXhr = new XMLHttpRequest();
-                uploadXhr.open('PUT', signedUrl, true);
-                uploadXhr.setRequestHeader('Content-Type', file.type);
-                
-                uploadXhr.upload.onprogress = (event) => {
-                    if (event.lengthComputable) {
-                        const percentage = (event.loaded / event.total) * 100;
-                        onProgress(percentage);
-                    }
-                };
+    xhr.onload = () => {
+      if (xhr.status === 200) {
+        onProgress(100);
+        // 3. Construct the public URL manually after successful upload.
+        const publicUrl = `${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/${bucket}/${filePath}`;
+        resolve(publicUrl);
+      } else {
+        reject(new Error(`Upload failed with status: ${xhr.status} - ${xhr.responseText}`));
+      }
+    };
 
-                uploadXhr.onload = () => {
-                    if (uploadXhr.status === 200) {
-                        onProgress(100);
-                        const { data: { publicUrl } } = supabase.storage.from(bucket).getPublicUrl(filePath);
-                        resolve(publicUrl);
-                    } else {
-                        reject(new Error(`Upload failed with status: ${uploadXhr.status}`));
-                    }
-                };
+    xhr.onerror = () => {
+      reject(new Error('An error occurred during the upload.'));
+    };
 
-                uploadXhr.onerror = () => {
-                    reject(new Error('An error occurred during the upload.'));
-                };
-
-                uploadXhr.send(file);
-            })
-            .catch(reject);
-    });
+    xhr.send(file);
+  });
 }
 
 
@@ -141,6 +133,8 @@ export default function ProjectForm({ project }: ProjectFormProps) {
 
   const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
+    if (isSubmitting) return;
+
     setIsSubmitting(true);
     setUploadProgress(0);
     setUploadMessage('Starting upload...');
@@ -208,6 +202,7 @@ export default function ProjectForm({ project }: ProjectFormProps) {
       }
 
       setUploadMessage('Saving project details...');
+      setUploadProgress(100);
       
       const formEl = formRef.current!;
       const serverFormData = new FormData();
@@ -340,7 +335,7 @@ export default function ProjectForm({ project }: ProjectFormProps) {
           )}
 
           {isSubmitting && (
-            <div className="space-y-2">
+            <div className="space-y-2 pt-4">
               <Label>{uploadMessage}</Label>
               <Progress value={uploadProgress} />
             </div>
