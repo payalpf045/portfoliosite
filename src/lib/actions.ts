@@ -65,6 +65,8 @@ export async function saveProject(formData: FormData) {
 
     let projectData: Partial<Project>;
 
+    const stillsValue = formData.get('stills');
+
     if (category === 'Film') {
       const validatedFields = filmSchema.safeParse({
         id: id,
@@ -74,7 +76,7 @@ export async function saveProject(formData: FormData) {
         category: 'Film',
         youtubeVideoId: formData.get('youtubeVideoId') || undefined,
         thumbnail: formData.get('thumbnail'),
-        stills: formData.get('stills'),
+        stills: stillsValue,
       });
       if (!validatedFields.success) {
         console.error(validatedFields.error.flatten().fieldErrors);
@@ -95,7 +97,7 @@ export async function saveProject(formData: FormData) {
         console.error(validatedFields.error.flatten().fieldErrors);
         throw new Error('Color Grading project validation failed');
       }
-      projectData = { ...validatedFields.data, thumbnail: validatedFields.data.afterImageUrl || validatedFields.data.beforeImageUrl || '' };
+      projectData = { ...validatedFields.data, thumbnail: formData.get('thumbnail') as string || '' };
     } else {
       throw new Error('Invalid project category');
     }
@@ -105,7 +107,6 @@ export async function saveProject(formData: FormData) {
         id: projectId,
     } as Project;
 
-    // Delete old files if they are being replaced
     const existingProject = id ? await getProjectById(id) : undefined;
     if (existingProject) {
       if (finalProjectData.thumbnail && existingProject.thumbnail && finalProjectData.thumbnail !== existingProject.thumbnail) {
@@ -117,8 +118,7 @@ export async function saveProject(formData: FormData) {
       if (finalProjectData.afterImageUrl && existingProject.afterImageUrl && finalProjectData.afterImageUrl !== existingProject.afterImageUrl) {
         await deleteFile(existingProject.afterImageUrl);
       }
-      // Stills are handled by replacing the whole array
-      if (finalProjectData.stills && existingProject.stills && finalProjectData.stills.length > 0) {
+      if (finalProjectData.stills && existingProject.stills) {
         const newStillsSet = new Set(finalProjectData.stills);
         const stillsToDelete = existingProject.stills.filter(s => !newStillsSet.has(s));
         await Promise.all(stillsToDelete.map(url => deleteFile(url)));
@@ -146,7 +146,6 @@ export async function deleteProject(formData: FormData) {
   try {
     const project = await getProjectById(id);
     if(project) {
-        // Delete associated files from Supabase Storage
         const filesToDelete: (string | undefined)[] = [];
         filesToDelete.push(project.thumbnail);
         filesToDelete.push(project.beforeImageUrl);

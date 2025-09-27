@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useTransition, useEffect } from 'react';
+import { useState, useTransition, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { useToast } from '@/hooks/use-toast';
 import { Project } from '@/lib/definitions';
@@ -23,7 +23,7 @@ interface ProjectFormProps {
   project?: Project;
 }
 
-// True client-side direct upload function with progress tracking
+// True client-side direct upload function with real progress tracking
 async function uploadFileWithProgress(
   file: File,
   bucket: string,
@@ -31,27 +31,56 @@ async function uploadFileWithProgress(
 ): Promise<string> {
     const fileExtension = file.name.split('.').pop();
     const fileName = `${crypto.randomBytes(16).toString('hex')}.${fileExtension}`;
-    
-    const { data, error } = await supabase.storage
-      .from(bucket)
-      .upload(fileName, file, {
-        cacheControl: '3600',
-        upsert: false,
-      });
+    const filePath = `${fileName}`;
 
-    if (error) {
-      throw new Error(`Supabase upload error: ${error.message}`);
-    }
-    
-    // Simulate progress as Supabase v2 client doesn't support it directly in this way
-    onProgress(100); 
+    return new Promise((resolve, reject) => {
+        const { data: { publicUrl } } = supabase.storage.from(bucket).getPublicUrl(filePath);
 
-    const { data: { publicUrl } } = supabase.storage.from(bucket).getPublicUrl(fileName);
-    return publicUrl;
+        const xhr = new XMLHttpRequest();
+        xhr.open('POST', publicUrl, true);
+
+        // Get the upload URL from Supabase
+        supabase.storage.from(bucket).createSignedUploadUrl(filePath)
+            .then(({ data, error }) => {
+                if (error || !data) {
+                    return reject(error || new Error('Could not get signed URL'));
+                }
+                const signedUrl = data.signedUrl;
+
+                const uploadXhr = new XMLHttpRequest();
+                uploadXhr.open('PUT', signedUrl, true);
+                uploadXhr.setRequestHeader('Content-Type', file.type);
+                
+                uploadXhr.upload.onprogress = (event) => {
+                    if (event.lengthComputable) {
+                        const percentage = (event.loaded / event.total) * 100;
+                        onProgress(percentage);
+                    }
+                };
+
+                uploadXhr.onload = () => {
+                    if (uploadXhr.status === 200) {
+                        onProgress(100);
+                        const { data: { publicUrl } } = supabase.storage.from(bucket).getPublicUrl(filePath);
+                        resolve(publicUrl);
+                    } else {
+                        reject(new Error(`Upload failed with status: ${uploadXhr.status}`));
+                    }
+                };
+
+                uploadXhr.onerror = () => {
+                    reject(new Error('An error occurred during the upload.'));
+                };
+
+                uploadXhr.send(file);
+            })
+            .catch(reject);
+    });
 }
 
 
 export default function ProjectForm({ project }: ProjectFormProps) {
+  const formRef = useRef<HTMLFormElement>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [category, setCategory] = useState<string>(project?.category || 'Film');
   
@@ -111,94 +140,111 @@ export default function ProjectForm({ project }: ProjectFormProps) {
   };
 
   const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
-    e.preventDefault(); // CRITICAL: Prevent default form submission
+    e.preventDefault();
     setIsSubmitting(true);
     setUploadProgress(0);
-    setUploadMessage('');
+    setUploadMessage('Starting upload...');
     
-    // Get text data from the form
-    const formEl = e.currentTarget;
-    const title = (formEl.elements.namedItem('title') as HTMLInputElement).value;
-    const description = (formEl.elements.namedItem('description') as HTMLTextAreaElement).value;
-    const date = (formEl.elements.namedItem('date') as HTMLInputElement).value;
-    const youtubeVideoId = (formEl.elements.namedItem('youtubeVideoId') as HTMLInputElement)?.value || '';
-
     try {
       let uploadedThumbnailUrl = project?.thumbnail || '';
       let uploadedStillsUrls = project?.stills || [];
       let uploadedBeforeImageUrl = project?.beforeImageUrl || '';
       let uploadedAfterImageUrl = project?.afterImageUrl || '';
 
-      // --- Direct Client-Side Uploads ---
+      const createUploadTask = (file: File, bucket: string, message: string) => async () => {
+          setUploadMessage(message);
+          return await uploadFileWithProgress(file, bucket, (p) => setUploadProgress(p));
+      };
+      
+      const tasks: { run: () => Promise<string>, assign: (url: string) => void }[] = [];
 
-      if (aiGeneratedThumbnail) {
-        setUploadMessage('Uploading AI thumbnail...');
-        const response = await fetch(aiGeneratedThumbnail);
-        const blob = await response.blob();
-        const file = new File([blob], 'thumbnail.png', { type: blob.type });
-        uploadedThumbnailUrl = await uploadFileWithProgress(file, 'project-thumbnails', (p) => setUploadProgress(p));
+      if (aiGeneratedThumbnail && aiGeneratedThumbnail !== project?.thumbnail) {
+          tasks.push({
+            run: async () => {
+              setUploadMessage('Uploading AI thumbnail...');
+              const response = await fetch(aiGeneratedThumbnail);
+              const blob = await response.blob();
+              const file = new File([blob], 'thumbnail.png', { type: blob.type });
+              return await uploadFileWithProgress(file, 'project-thumbnails', setUploadProgress);
+            },
+            assign: (url) => uploadedThumbnailUrl = url,
+          });
       } else if (thumbnailFile) {
-        setUploadMessage('Uploading thumbnail...');
-        uploadedThumbnailUrl = await uploadFileWithProgress(thumbnailFile, 'project-thumbnails', (p) => setUploadProgress(p));
+          tasks.push({
+            run: createUploadTask(thumbnailFile, 'project-thumbnails', 'Uploading thumbnail...'),
+            assign: (url) => uploadedThumbnailUrl = url
+          });
       }
 
       if (stillsFiles && stillsFiles.length > 0) {
         uploadedStillsUrls = []; // Clear old stills if new ones are uploaded
         for (let i = 0; i < stillsFiles.length; i++) {
           const file = stillsFiles[i];
-          setUploadMessage(`Uploading still ${i + 1}/${stillsFiles.length}...`);
-          const url = await uploadFileWithProgress(file, 'stills', (p) => setUploadProgress(((i + p / 100) / stillsFiles.length) * 100));
-          uploadedStillsUrls.push(url);
+          tasks.push({
+            run: createUploadTask(file, 'stills', `Uploading still ${i + 1}/${stillsFiles.length}...`),
+            assign: (url) => uploadedStillsUrls.push(url),
+          });
         }
       }
-      
+
       if (beforeImageFile) {
-        setUploadMessage('Uploading before image...');
-        uploadedBeforeImageUrl = await uploadFileWithProgress(beforeImageFile, 'color-grading', (p) => setUploadProgress(p));
+        tasks.push({
+          run: createUploadTask(beforeImageFile, 'color-grading', 'Uploading before image...'),
+          assign: (url) => uploadedBeforeImageUrl = url,
+        });
       }
-      
+
       if (afterImageFile) {
-        setUploadMessage('Uploading after image...');
-        uploadedAfterImageUrl = await uploadFileWithProgress(afterImageFile, 'color-grading', (p) => setUploadProgress(p));
+        tasks.push({
+          run: createUploadTask(afterImageFile, 'color-grading', 'Uploading after image...'),
+          assign: (url) => uploadedAfterImageUrl = url,
+        });
       }
-      
+
+      for (const task of tasks) {
+          const url = await task.run();
+          task.assign(url);
+          setUploadProgress(0); // Reset progress for next file
+      }
+
       setUploadMessage('Saving project details...');
-      setUploadProgress(100);
       
-      // CRITICAL: Create a NEW, lightweight FormData object for the server action
+      const formEl = formRef.current!;
       const serverFormData = new FormData();
       serverFormData.append('id', project?.id || '');
-      serverFormData.append('title', title);
-      serverFormData.append('description', description);
-      serverFormData.append('date', date);
+      serverFormData.append('title', (formEl.elements.namedItem('title') as HTMLInputElement).value);
+      serverFormData.append('description', (formEl.elements.namedItem('description') as HTMLTextAreaElement).value);
+      serverFormData.append('date', (formEl.elements.namedItem('date') as HTMLInputElement).value);
       serverFormData.append('category', category);
       serverFormData.append('thumbnail', uploadedThumbnailUrl);
       serverFormData.append('stills', JSON.stringify(uploadedStillsUrls));
       serverFormData.append('beforeImageUrl', uploadedBeforeImageUrl);
       serverFormData.append('afterImageUrl', uploadedAfterImageUrl);
-      serverFormData.append('youtubeVideoId', youtubeVideoId);
+      if (category === 'Film') {
+        serverFormData.append('youtubeVideoId', (formEl.elements.namedItem('youtubeVideoId') as HTMLInputElement)?.value || '');
+      }
 
-      // Call the server action with the lightweight payload
       const result = await saveProject(serverFormData);
 
       if (result.success) {
         toast({ title: 'Success', description: result.message });
         router.push('/admin');
-        router.refresh(); // Force a refresh to show new data
+        router.refresh();
       } else {
         throw new Error(result.message);
       }
 
     } catch (error: any) {
       toast({ title: 'Error', description: error.message || 'An unknown error occurred.', variant: 'destructive' });
-      setIsSubmitting(false);
-      setUploadProgress(0);
-      setUploadMessage('');
+    } finally {
+        setIsSubmitting(false);
+        setUploadProgress(0);
+        setUploadMessage('');
     }
   };
 
   return (
-    <form onSubmit={handleSubmit}>
+    <form ref={formRef} onSubmit={handleSubmit}>
       <Card>
         <CardContent className="p-6 space-y-6">
           {project && <input type="hidden" name="id" value={project.id} />}
