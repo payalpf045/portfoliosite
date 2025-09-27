@@ -20,6 +20,7 @@ async function deleteFile(fileUrl: string): Promise<void> {
   try {
     const url = new URL(fileUrl);
     const pathParts = url.pathname.split('/');
+    // Expected URL format: /storage/v1/object/public/bucket-name/file-path
     const bucket = pathParts[4];
     const filePath = pathParts.slice(5).join('/');
     
@@ -31,6 +32,7 @@ async function deleteFile(fileUrl: string): Promise<void> {
     console.error(`Failed to delete file at ${fileUrl}:`, error.message);
   }
 }
+
 
 // --- Schemas ---
 const baseProjectSchema = z.object({
@@ -89,6 +91,7 @@ export async function saveProject(formData: FormData) {
         category: 'Color Grading',
         beforeImageUrl: formData.get('beforeImageUrl'),
         afterImageUrl: formData.get('afterImageUrl'),
+        thumbnail: formData.get('thumbnail'),
       });
       if (!validatedFields.success) {
         console.error(validatedFields.error.flatten().fieldErrors);
@@ -127,7 +130,7 @@ export async function saveProject(formData: FormData) {
     revalidatePath('/admin');
     revalidatePath('/');
     revalidatePath('/film');
-revalidatePath('/color-grading');
+    revalidatePath('/color-grading');
     revalidatePath(`/project/${projectId}`);
     
     return { success: true, message: 'Project saved successfully.' };
@@ -252,6 +255,7 @@ export async function generateThumbnailAction(description: string, referenceImag
     }
 }
 
+
 // --- Signed URL Action ---
 export async function createSignedUploadUrl(path: string, bucket: string, contentType: string) {
   try {
@@ -268,3 +272,5 @@ export async function createSignedUploadUrl(path: string, bucket: string, conten
     return { error: 'Failed to create signed URL: ' + error.message };
   }
 }
+
+    

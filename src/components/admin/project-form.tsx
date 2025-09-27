@@ -54,6 +54,7 @@ async function uploadFileWithProgress(
       if (xhr.status === 200) {
         onProgress(100);
         // 3. Construct the public URL manually after successful upload.
+        // Note: The public URL structure depends on your Supabase project settings.
         const publicUrl = `${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/${bucket}/${filePath}`;
         resolve(publicUrl);
       } else {
@@ -62,7 +63,7 @@ async function uploadFileWithProgress(
     };
 
     xhr.onerror = () => {
-      reject(new Error('An error occurred during the upload.'));
+      reject(new Error('An error occurred during the upload. Check the browser console for more details.'));
     };
 
     xhr.send(file);
@@ -210,10 +211,13 @@ export default function ProjectForm({ project }: ProjectFormProps) {
       serverFormData.append('description', (formEl.elements.namedItem('description') as HTMLTextAreaElement).value);
       serverFormData.append('date', (formEl.elements.namedItem('date') as HTMLInputElement).value);
       serverFormData.append('category', category);
+      
+      // Ensure required fields for each category have a value, even if empty
       serverFormData.append('thumbnail', uploadedThumbnailUrl);
-      serverFormData.append('stills', JSON.stringify(uploadedStillsUrls));
       serverFormData.append('beforeImageUrl', uploadedBeforeImageUrl);
       serverFormData.append('afterImageUrl', uploadedAfterImageUrl);
+      serverFormData.append('stills', JSON.stringify(uploadedStillsUrls));
+
       if (category === 'Film') {
         serverFormData.append('youtubeVideoId', (formEl.elements.namedItem('youtubeVideoId') as HTMLInputElement)?.value || '');
       }
@@ -272,43 +276,45 @@ export default function ProjectForm({ project }: ProjectFormProps) {
             </div>
           </div>
 
+          
+          <div className="space-y-4 rounded-lg border p-4">
+              <Label>Thumbnail</Label>
+              {thumbnailPreview && (
+                  <div className="w-48 aspect-video relative">
+                      <Image src={thumbnailPreview} alt="Thumbnail preview" fill className="object-cover rounded-md" />
+                  </div>
+              )}
+              <div className="space-y-2">
+                <Label htmlFor="thumbnailFile">Upload Thumbnail</Label>
+                <Input id="thumbnailFile" name="thumbnailFile" type="file" accept="image/*" onChange={(e) => handleFileChange(e, setThumbnailFile, setThumbnailPreview)} disabled={isSubmitting} />
+              </div>
+              <div className="text-sm text-muted-foreground text-center my-2">OR</div>
+              <div className="space-y-2">
+                  <Label>Generate with AI</Label>
+                  <div className="flex items-center gap-2">
+                    <Input type="file" accept="image/*" onChange={(e) => setReferenceImageFile(e.target.files?.[0] || null)} disabled={isSubmitting || isGenerating} />
+                    <Button type="button" onClick={handleGenerateThumbnail} disabled={isSubmitting || isGenerating} variant="outline">
+                      <Sparkles className={`mr-2 h-4 w-4 ${isGenerating ? 'animate-spin' : ''}`} />
+                      {isGenerating ? 'Generating...' : 'Generate'}
+                    </Button>
+                  </div>
+                  <p className="text-xs text-muted-foreground">Optionally provide a reference image for the AI.</p>
+              </div>
+          </div>
+
+
           {category === 'Film' && (
             <div className="space-y-6">
               <div className="space-y-2">
                 <Label htmlFor="youtubeVideoId">YouTube Video ID</Label>
                 <Input id="youtubeVideoId" name="youtubeVideoId" defaultValue={project?.youtubeVideoId || ''} disabled={isSubmitting} />
               </div>
-              
-              <div className="space-y-4 rounded-lg border p-4">
-                  <Label>Thumbnail</Label>
-                  {thumbnailPreview && (
-                      <div className="w-48 aspect-video relative">
-                          <Image src={thumbnailPreview} alt="Thumbnail preview" fill className="object-cover rounded-md" />
-                      </div>
-                  )}
-                  <div className="space-y-2">
-                    <Label htmlFor="thumbnailFile">Upload Thumbnail</Label>
-                    <Input id="thumbnailFile" name="thumbnailFile" type="file" accept="image/*" onChange={(e) => handleFileChange(e, setThumbnailFile, setThumbnailPreview)} disabled={isSubmitting} />
-                  </div>
-                  <div className="text-sm text-muted-foreground text-center my-2">OR</div>
-                  <div className="space-y-2">
-                      <Label>Generate with AI</Label>
-                      <div className="flex items-center gap-2">
-                        <Input type="file" accept="image/*" onChange={(e) => setReferenceImageFile(e.target.files?.[0] || null)} disabled={isSubmitting || isGenerating} />
-                        <Button type="button" onClick={handleGenerateThumbnail} disabled={isSubmitting || isGenerating} variant="outline">
-                          <Sparkles className={`mr-2 h-4 w-4 ${isGenerating ? 'animate-spin' : ''}`} />
-                          {isGenerating ? 'Generating...' : 'Generate'}
-                        </Button>
-                      </div>
-                      <p className="text-xs text-muted-foreground">Optionally provide a reference image for the AI.</p>
-                  </div>
-              </div>
 
               <div className="space-y-2">
                 <Label htmlFor="stills">Screenshot Stills</Label>
                 <Input id="stills" name="stills" type="file" multiple accept="image/*" onChange={(e) => setStillsFiles(e.target.files)} disabled={isSubmitting} />
                 {project?.stills && !stillsFiles && (
-                    <div className="flex gap-2 mt-2">
+                    <div className="flex flex-wrap gap-2 mt-2">
                         {project.stills.map(still => (
                             <Image key={still} src={still} alt="still" width={100} height={56} className="rounded-md object-cover"/>
                         ))}
@@ -349,3 +355,5 @@ export default function ProjectForm({ project }: ProjectFormProps) {
     </form>
   );
 }
+
+    
