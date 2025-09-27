@@ -17,23 +17,6 @@ import { generateProjectThumbnail } from '@/ai/flows/generate-project-thumbnail'
 import { supabase } from './supabase-client';
 
 // --- File Handling Utility ---
-async function saveFile(file: File, folder: string): Promise<string> {
-  if (!file) {
-    throw new Error('No file provided to save.');
-  }
-  const fileExtension = file.name.split('.').pop();
-  const fileName = `${folder}/${crypto.randomBytes(16).toString('hex')}.${fileExtension}`;
-
-  const { data, error } = await supabase.storage.from(folder).upload(fileName, file);
-  
-  if (error) {
-    throw new Error(`Supabase storage error: ${error.message}`);
-  }
-
-  const { data: { publicUrl } } = supabase.storage.from(folder).getPublicUrl(fileName);
-  return publicUrl;
-}
-
 async function deleteFile(fileUrl: string): Promise<void> {
   if (!fileUrl) return;
   try {
@@ -61,19 +44,10 @@ const baseProjectSchema = z.object({
   category: z.enum(['Film', 'Color Grading']),
 });
 
-const fileSchema = z
-  .instanceof(File)
-  .refine((file) => file.size > 0, 'File is required.')
-  .refine((file) => file.size <= 25 * 1024 * 1024, `Max file size is 25MB.`)
-  .refine(
-    (file) => ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'].includes(file.type),
-    'Only .jpg, .jpeg, .png and .webp formats are supported.'
-  );
-
 const filmSchema = baseProjectSchema.extend({
   category: z.literal('Film'),
   youtubeVideoId: z.string().optional(),
-  stills: z.array(z.string()).optional(),
+  stills: z.string().transform(val => JSON.parse(val) as string[]).optional(),
 });
 
 const colorGradingSchema = baseProjectSchema.extend({
@@ -84,150 +58,81 @@ const colorGradingSchema = baseProjectSchema.extend({
 
 // --- Project Actions ---
 
-export async function saveProject(prevState: any, formData: FormData) {
-  const category = formData.get('category') as Project['category'];
-  
-  if (category === 'Film') {
-    return saveFilmProject(formData);
-  } else if (category === 'Color Grading') {
-    return saveColorGradingProject(formData);
-  }
-  
-  return { message: 'Invalid project category.', success: false };
-}
-
-async function saveFilmProject(formData: FormData) {
-  const validatedFields = filmSchema.safeParse({
-    id: formData.get('id') || undefined,
-    title: formData.get('title'),
-    description: formData.get('description'),
-    date: formData.get('date'),
-    category: 'Film',
-    youtubeVideoId: formData.get('youtubeVideoId') || undefined,
-  });
-
-  if (!validatedFields.success) {
-    return {
-      message: 'Validation failed: ' + validatedFields.error.flatten().fieldErrors,
-      success: false,
-    };
-  }
-
-  const { id, ...data } = validatedFields.data;
-  const projectId = id || crypto.randomBytes(8).toString('hex');
-  
-  const youtubeId = data.youtubeVideoId ? data.youtubeVideoId.trimEnd() : '';
-
+export async function saveProject(formData: FormData) {
   try {
-    const existingProject = id ? await getProjectById(id) : undefined;
-    let newThumbnailUrl = existingProject?.thumbnail || formData.get('thumbnail') as string || '';
-    
-    const thumbnailFile = formData.get('thumbnailFile') as File;
-    if (thumbnailFile && thumbnailFile.size > 0) {
-      const thumbValidation = fileSchema.safeParse(thumbnailFile);
-      if (!thumbValidation.success) throw new Error('Thumbnail validation failed');
-      if (existingProject?.thumbnail) {
-        await deleteFile(existingProject.thumbnail);
-      }
-      newThumbnailUrl = await saveFile(thumbnailFile, 'project-thumbnails');
-    } else if(newThumbnailUrl.startsWith('data:')) {
-      // Handle AI generated thumbnail
-      const response = await fetch(newThumbnailUrl);
-      const blob = await response.blob();
-      const file = new File([blob], "thumbnail.png", { type: blob.type });
-      if (existingProject?.thumbnail) {
-        await deleteFile(existingProject.thumbnail);
-      }
-      newThumbnailUrl = await saveFile(file, 'project-thumbnails');
-    }
-    
-    const stillFiles = formData.getAll('stills') as File[];
-    let newStillsUrls = existingProject?.stills || [];
-    if (stillFiles.some(f => f.size > 0)) {
-        if (existingProject?.stills) {
-          await Promise.all(existingProject.stills.map(url => deleteFile(url)));
-        }
-        newStillsUrls = await Promise.all(stillFiles.map(file => saveFile(file, `stills`)));
-    }
+    const category = formData.get('category') as Project['category'];
+    const id = formData.get('id') as string | undefined;
+    const projectId = id || crypto.randomBytes(8).toString('hex');
 
-    const projectData: Project = {
-      ...data,
-      id: projectId,
-      thumbnail: newThumbnailUrl,
-      stills: newStillsUrls,
-      youtubeVideoId: youtubeId,
-    };
-    
-    await dbSaveProject(projectData);
-  } catch (e: any) {
-    return { message: 'Failed to save project: ' + e.message, success: false };
-  }
-  revalidatePath('/admin');
-  revalidatePath(`/project/${projectId}`);
-  revalidatePath('/');
-  revalidatePath('/film');
-  revalidatePath('/color-grading');
-  redirect('/admin');
-}
+    let projectData: Partial<Project>;
 
-async function saveColorGradingProject(formData: FormData) {
-    const validatedFields = colorGradingSchema.safeParse({
-        id: formData.get('id') || undefined,
+    if (category === 'Film') {
+      const validatedFields = filmSchema.safeParse({
+        id: id,
+        title: formData.get('title'),
+        description: formData.get('description'),
+        date: formData.get('date'),
+        category: 'Film',
+        youtubeVideoId: formData.get('youtubeVideoId') || undefined,
+        thumbnail: formData.get('thumbnail'),
+        stills: formData.get('stills'),
+      });
+      if (!validatedFields.success) throw new Error('Film project validation failed');
+      projectData = validatedFields.data;
+    } else if (category === 'Color Grading') {
+      const validatedFields = colorGradingSchema.safeParse({
+        id: id,
         title: formData.get('title'),
         description: formData.get('description'),
         date: formData.get('date'),
         category: 'Color Grading',
-    });
-
-    if (!validatedFields.success) {
-        return {
-          message: 'Validation failed: ' + JSON.stringify(validatedFields.error.flatten().fieldErrors),
-          success: false,
-        };
+        beforeImageUrl: formData.get('beforeImageUrl'),
+        afterImageUrl: formData.get('afterImageUrl'),
+      });
+      if (!validatedFields.success) throw new Error('Color Grading project validation failed');
+      projectData = { ...validatedFields.data, thumbnail: validatedFields.data.afterImageUrl || validatedFields.data.beforeImageUrl || '' };
+    } else {
+      throw new Error('Invalid project category');
     }
 
-    const { id, ...data } = validatedFields.data;
-    const projectId = id || crypto.randomBytes(8).toString('hex');
+    const finalProjectData: Project = {
+        ...projectData,
+        id: projectId,
+    } as Project;
 
-    try {
-        const existingProject = id ? await getProjectById(id) : undefined;
-        let beforeUrl = existingProject?.beforeImageUrl;
-        let afterUrl = existingProject?.afterImageUrl;
-
-        const beforeFile = formData.get('beforeImage') as File;
-        if (beforeFile && beforeFile.size > 0) {
-            if (beforeUrl) await deleteFile(beforeUrl);
-            beforeUrl = await saveFile(beforeFile, `color-grading`);
-        }
-
-        const afterFile = formData.get('afterImage') as File;
-        if (afterFile && afterFile.size > 0) {
-            if (afterUrl) await deleteFile(afterUrl);
-            afterUrl = await saveFile(afterFile, `color-grading`);
-        }
-
-        if (!id && (!beforeFile || beforeFile.size === 0 || !afterFile || afterFile.size === 0)) {
-          throw new Error('Before and After images are required for new color grading projects.');
-        }
-
-        const projectData: Project = {
-            ...data,
-            id: projectId,
-            beforeImageUrl: beforeUrl,
-            afterImageUrl: afterUrl,
-            thumbnail: afterUrl || beforeUrl || '',
-        };
-
-        await dbSaveProject(projectData);
-    } catch (e: any) {
-        return { message: 'Failed to save project: ' + e.message, success: false };
+    // Delete old files if they are being replaced
+    const existingProject = id ? await getProjectById(id) : undefined;
+    if (existingProject) {
+      if (finalProjectData.thumbnail && existingProject.thumbnail && finalProjectData.thumbnail !== existingProject.thumbnail) {
+        await deleteFile(existingProject.thumbnail);
+      }
+      if (finalProjectData.beforeImageUrl && existingProject.beforeImageUrl && finalProjectData.beforeImageUrl !== existingProject.beforeImageUrl) {
+        await deleteFile(existingProject.beforeImageUrl);
+      }
+      if (finalProjectData.afterImageUrl && existingProject.afterImageUrl && finalProjectData.afterImageUrl !== existingProject.afterImageUrl) {
+        await deleteFile(existingProject.afterImageUrl);
+      }
+      // Stills are handled by replacing the whole array
+      if (finalProjectData.stills && existingProject.stills && finalProjectData.stills.length > 0) {
+        const newStillsSet = new Set(finalProjectData.stills);
+        const stillsToDelete = existingProject.stills.filter(s => !newStillsSet.has(s));
+        await Promise.all(stillsToDelete.map(url => deleteFile(url)));
+      }
     }
+    
+    await dbSaveProject(finalProjectData);
+
     revalidatePath('/admin');
-    revalidatePath(`/project/${projectId}`);
     revalidatePath('/');
     revalidatePath('/film');
     revalidatePath('/color-grading');
-    redirect('/admin');
+    revalidatePath(`/project/${projectId}`);
+    
+    return { success: true, message: 'Project saved successfully.' };
+
+  } catch (e: any) {
+    return { success: false, message: 'Failed to save project: ' + e.message };
+  }
 }
 
 export async function deleteProject(formData: FormData) {
@@ -266,13 +171,19 @@ export async function savePhotographyImage(prevState: any, formData: FormData) {
 
     if (!imageFile || imageFile.size === 0) return { message: 'Image is required.' };
     if (!title) return { message: 'Title is required.' };
+
+    const fileExtension = imageFile.name.split('.').pop();
+    const fileName = `photography/${crypto.randomBytes(16).toString('hex')}.${fileExtension}`;
     
-    const imageId = crypto.randomBytes(8).toString('hex');
     try {
-        const imageUrl = await saveFile(imageFile, 'photography');
+        const { error: uploadError } = await supabase.storage.from('photography').upload(fileName, imageFile);
+        if (uploadError) throw new Error(uploadError.message);
+
+        const { data: { publicUrl } } = supabase.storage.from('photography').getPublicUrl(fileName);
+
         const imageData: PhotographyImage = {
-            id: imageId,
-            url: imageUrl,
+            id: crypto.randomBytes(8).toString('hex'),
+            url: publicUrl,
             title: title,
             date: new Date().toISOString(),
         };
