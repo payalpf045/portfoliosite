@@ -13,13 +13,46 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Button } from '@/components/ui/button';
 import { SubmitButton } from './submit-button';
 import Image from 'next/image';
-import { fileToDataUri, uploadFileWithProgress } from '@/lib/utils';
+import { fileToDataUri } from '@/lib/utils';
 import { Sparkles } from 'lucide-react';
 import { Progress } from '@/components/ui/progress';
+import { supabase } from '@/lib/supabase-client';
+import crypto from 'crypto';
 
 interface ProjectFormProps {
   project?: Project;
 }
+
+// Client-side direct upload function
+async function uploadFileWithProgress(
+  file: File,
+  bucket: string,
+  onProgress: (percentage: number) => void
+): Promise<string> {
+    const fileExtension = file.name.split('.').pop();
+    const fileName = `${crypto.randomBytes(16).toString('hex')}.${fileExtension}`;
+    
+    const { data, error } = await supabase.storage
+      .from(bucket)
+      .upload(fileName, file, {
+        cacheControl: '3600',
+        upsert: false,
+      });
+
+    if (error) {
+      throw new Error(`Supabase upload error: ${error.message}`);
+    }
+    
+    // The public URL is constructed manually.
+    const { data: { publicUrl } } = supabase.storage.from(bucket).getPublicUrl(fileName);
+    
+    // Simulate progress as Supabase v2 client doesn't support it directly in this way
+    // In a real app, you might use a different method or library for progress.
+    // For now, we show progress for UX but the await above handles the actual upload.
+    onProgress(100);
+    return publicUrl;
+}
+
 
 export default function ProjectForm({ project }: ProjectFormProps) {
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -84,14 +117,18 @@ export default function ProjectForm({ project }: ProjectFormProps) {
     e.preventDefault();
     setIsSubmitting(true);
     setUploadProgress(0);
+    setUploadMessage('');
 
-    const formData = new FormData(e.currentTarget);
-    let uploadedThumbnailUrl = project?.thumbnail || '';
-    let uploadedStillsUrls = project?.stills || [];
-    let uploadedBeforeImageUrl = project?.beforeImageUrl || '';
-    let uploadedAfterImageUrl = project?.afterImageUrl || '';
+    const currentFormData = new FormData(e.currentTarget);
 
     try {
+      let uploadedThumbnailUrl = project?.thumbnail || '';
+      let uploadedStillsUrls = project?.stills || [];
+      let uploadedBeforeImageUrl = project?.beforeImageUrl || '';
+      let uploadedAfterImageUrl = project?.afterImageUrl || '';
+
+      // --- Direct Client-Side Uploads with Progress ---
+
       if (aiGeneratedThumbnail) {
         setUploadMessage('Uploading AI thumbnail...');
         const response = await fetch(aiGeneratedThumbnail);
@@ -108,7 +145,8 @@ export default function ProjectForm({ project }: ProjectFormProps) {
         for (let i = 0; i < stillsFiles.length; i++) {
           const file = stillsFiles[i];
           setUploadMessage(`Uploading still ${i + 1}/${stillsFiles.length}...`);
-          const url = await uploadFileWithProgress(file, 'stills', setUploadProgress);
+          const percentage = ((i + 1) / stillsFiles.length) * 100;
+          const url = await uploadFileWithProgress(file, 'stills', () => setUploadProgress(percentage));
           uploadedStillsUrls.push(url);
         }
       }
@@ -124,12 +162,24 @@ export default function ProjectForm({ project }: ProjectFormProps) {
       }
       
       setUploadMessage('Saving project details...');
-      formData.set('thumbnail', uploadedThumbnailUrl);
-      formData.set('stills', JSON.stringify(uploadedStillsUrls));
-      formData.set('beforeImageUrl', uploadedBeforeImageUrl);
-      formData.set('afterImageUrl', uploadedAfterImageUrl);
       
-      const result = await saveProject(formData);
+      // We are creating a new FormData object to pass to the server action.
+      // This new FormData will only contain the text fields and the URLs of the uploaded files, not the files themselves.
+      const serverFormData = new FormData();
+      serverFormData.append('id', project?.id || '');
+      serverFormData.append('title', currentFormData.get('title') as string);
+      serverFormData.append('description', currentFormData.get('description') as string);
+      serverFormData.append('date', currentFormData.get('date') as string);
+      serverFormData.append('category', category);
+
+      serverFormData.append('thumbnail', uploadedThumbnailUrl);
+      serverFormData.append('stills', JSON.stringify(uploadedStillsUrls));
+      serverFormData.append('beforeImageUrl', uploadedBeforeImageUrl);
+      serverFormData.append('afterImageUrl', uploadedAfterImageUrl);
+      serverFormData.append('youtubeVideoId', currentFormData.get('youtubeVideoId') as string || '');
+
+
+      const result = await saveProject(serverFormData);
 
       if (result.success) {
         toast({ title: 'Success', description: result.message });
@@ -197,7 +247,7 @@ export default function ProjectForm({ project }: ProjectFormProps) {
                   )}
                   <div className="space-y-2">
                     <Label htmlFor="thumbnailFile">Upload Thumbnail</Label>
-                    <Input id="thumbnailFile" type="file" accept="image/*" onChange={(e) => handleFileChange(e, setThumbnailFile, setThumbnailPreview)} disabled={isSubmitting} />
+                    <Input id="thumbnailFile" name="thumbnailFile" type="file" accept="image/*" onChange={(e) => handleFileChange(e, setThumbnailFile, setThumbnailPreview)} disabled={isSubmitting} />
                   </div>
                   <div className="text-sm text-muted-foreground text-center my-2">OR</div>
                   <div className="space-y-2">
@@ -215,7 +265,7 @@ export default function ProjectForm({ project }: ProjectFormProps) {
 
               <div className="space-y-2">
                 <Label htmlFor="stills">Screenshot Stills</Label>
-                <Input id="stills" type="file" multiple accept="image/*" onChange={(e) => setStillsFiles(e.target.files)} disabled={isSubmitting} />
+                <Input id="stills" name="stills" type="file" multiple accept="image/*" onChange={(e) => setStillsFiles(e.target.files)} disabled={isSubmitting} />
                 {project?.stills && !stillsFiles && (
                     <div className="flex gap-2 mt-2">
                         {project.stills.map(still => (
@@ -231,12 +281,12 @@ export default function ProjectForm({ project }: ProjectFormProps) {
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
               <div className="space-y-2">
                 <Label htmlFor="beforeImage">Before Image</Label>
-                <Input id="beforeImage" type="file" accept="image/*" onChange={(e) => handleFileChange(e, setBeforeImageFile, setBeforeImagePreview)} disabled={isSubmitting} />
+                <Input id="beforeImage" name="beforeImage" type="file" accept="image/*" onChange={(e) => handleFileChange(e, setBeforeImageFile, setBeforeImagePreview)} disabled={isSubmitting} />
                 {beforeImagePreview && <Image src={beforeImagePreview} alt="before" width={200} height={112} className="rounded-md object-cover mt-2"/>}
               </div>
               <div className="space-y-2">
                 <Label htmlFor="afterImage">After Image</Label>
-                <Input id="afterImage" type="file" accept="image/*" onChange={(e) => handleFileChange(e, setAfterImageFile, setAfterImagePreview)} disabled={isSubmitting} />
+                <Input id="afterImage" name="afterImage" type="file" accept="image/*" onChange={(e) => handleFileChange(e, setAfterImageFile, setAfterImagePreview)} disabled={isSubmitting} />
                 {afterImagePreview && <Image src={afterImagePreview} alt="after" width={200} height={112} className="rounded-md object-cover mt-2"/>}
               </div>
             </div>

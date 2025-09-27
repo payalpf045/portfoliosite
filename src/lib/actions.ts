@@ -2,7 +2,6 @@
 
 import { z } from 'zod';
 import { revalidatePath } from 'next/cache';
-import { redirect } from 'next/navigation';
 import crypto from 'crypto';
 import {
   saveProject as dbSaveProject,
@@ -46,14 +45,14 @@ const baseProjectSchema = z.object({
 
 const filmSchema = baseProjectSchema.extend({
   category: z.literal('Film'),
-  youtubeVideoId: z.string().optional(),
-  stills: z.string().transform(val => JSON.parse(val) as string[]).optional(),
+  youtubeVideoId: z.string().optional().default(''),
+  stills: z.string().transform(val => JSON.parse(val) as string[]).optional().default([]),
 });
 
 const colorGradingSchema = baseProjectSchema.extend({
   category: z.literal('Color Grading'),
-  beforeImageUrl: z.string().optional(),
-  afterImageUrl: z.string().optional(),
+  beforeImageUrl: z.string().optional().default(''),
+  afterImageUrl: z.string().optional().default(''),
 });
 
 // --- Project Actions ---
@@ -77,7 +76,10 @@ export async function saveProject(formData: FormData) {
         thumbnail: formData.get('thumbnail'),
         stills: formData.get('stills'),
       });
-      if (!validatedFields.success) throw new Error('Film project validation failed');
+      if (!validatedFields.success) {
+        console.error(validatedFields.error.flatten().fieldErrors);
+        throw new Error('Film project validation failed');
+      }
       projectData = validatedFields.data;
     } else if (category === 'Color Grading') {
       const validatedFields = colorGradingSchema.safeParse({
@@ -89,7 +91,10 @@ export async function saveProject(formData: FormData) {
         beforeImageUrl: formData.get('beforeImageUrl'),
         afterImageUrl: formData.get('afterImageUrl'),
       });
-      if (!validatedFields.success) throw new Error('Color Grading project validation failed');
+      if (!validatedFields.success) {
+        console.error(validatedFields.error.flatten().fieldErrors);
+        throw new Error('Color Grading project validation failed');
+      }
       projectData = { ...validatedFields.data, thumbnail: validatedFields.data.afterImageUrl || validatedFields.data.beforeImageUrl || '' };
     } else {
       throw new Error('Invalid project category');
@@ -165,12 +170,32 @@ export async function deleteProject(formData: FormData) {
 }
 
 // --- Photography Actions ---
-export async function savePhotographyImage(prevState: any, formData: FormData) {
-    const imageFile = formData.get('image') as File;
-    const title = formData.get('title') as string;
+const MAX_FILE_SIZE = 25 * 1024 * 1024; // 25MB
+const ACCEPTED_IMAGE_TYPES = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'];
 
-    if (!imageFile || imageFile.size === 0) return { message: 'Image is required.' };
-    if (!title) return { message: 'Title is required.' };
+const imageSchema = z.object({
+  image: z
+    .any()
+    .refine((file) => file?.size <= MAX_FILE_SIZE, `Max image size is 25MB.`)
+    .refine(
+      (file) => ACCEPTED_IMAGE_TYPES.includes(file?.type),
+      'Only .jpg, .jpeg, .png and .webp formats are supported.'
+    ),
+  title: z.string().min(1, 'Title is required.'),
+});
+
+
+export async function savePhotographyImage(prevState: any, formData: FormData) {
+    const validatedFields = imageSchema.safeParse({
+        image: formData.get('image'),
+        title: formData.get('title'),
+    });
+
+    if (!validatedFields.success) {
+        return { message: validatedFields.error.flatten().fieldErrors.image?.[0] || validatedFields.error.flatten().fieldErrors.title?.[0] || 'Validation failed.' };
+    }
+
+    const { image: imageFile, title } = validatedFields.data;
 
     const fileExtension = imageFile.name.split('.').pop();
     const fileName = `photography/${crypto.randomBytes(16).toString('hex')}.${fileExtension}`;

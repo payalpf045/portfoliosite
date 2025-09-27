@@ -41,8 +41,9 @@ const nextConfig: NextConfig = {
       bodySizeLimit: '25mb',
     },
   },
+  // This is deprecated in Next.js 15 and functions is the new way
+  // Keeping both for compatibility with different Vercel build versions
   functions: {
-      // Allow more time for file uploads to complete
       maxDuration: 120,
   }
 };
