@@ -16,7 +16,6 @@ import Image from 'next/image';
 import { fileToDataUri } from '@/lib/utils';
 import { Sparkles } from 'lucide-react';
 import { Progress } from '@/components/ui/progress';
-import { supabase } from '@/lib/supabase-client';
 
 interface ProjectFormProps {
   project?: Project;
