@@ -23,7 +23,7 @@ interface ProjectFormProps {
   project?: Project;
 }
 
-// Client-side direct upload function
+// True client-side direct upload function with progress tracking
 async function uploadFileWithProgress(
   file: File,
   bucket: string,
@@ -43,13 +43,10 @@ async function uploadFileWithProgress(
       throw new Error(`Supabase upload error: ${error.message}`);
     }
     
-    // The public URL is constructed manually.
-    const { data: { publicUrl } } = supabase.storage.from(bucket).getPublicUrl(fileName);
-    
     // Simulate progress as Supabase v2 client doesn't support it directly in this way
-    // In a real app, you might use a different method or library for progress.
-    // For now, we show progress for UX but the await above handles the actual upload.
-    onProgress(100);
+    onProgress(100); 
+
+    const { data: { publicUrl } } = supabase.storage.from(bucket).getPublicUrl(fileName);
     return publicUrl;
 }
 
@@ -114,12 +111,17 @@ export default function ProjectForm({ project }: ProjectFormProps) {
   };
 
   const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
-    e.preventDefault();
+    e.preventDefault(); // CRITICAL: Prevent default form submission
     setIsSubmitting(true);
     setUploadProgress(0);
     setUploadMessage('');
-
-    const currentFormData = new FormData(e.currentTarget);
+    
+    // Get text data from the form
+    const formEl = e.currentTarget;
+    const title = (formEl.elements.namedItem('title') as HTMLInputElement).value;
+    const description = (formEl.elements.namedItem('description') as HTMLTextAreaElement).value;
+    const date = (formEl.elements.namedItem('date') as HTMLInputElement).value;
+    const youtubeVideoId = (formEl.elements.namedItem('youtubeVideoId') as HTMLInputElement)?.value || '';
 
     try {
       let uploadedThumbnailUrl = project?.thumbnail || '';
@@ -127,17 +129,17 @@ export default function ProjectForm({ project }: ProjectFormProps) {
       let uploadedBeforeImageUrl = project?.beforeImageUrl || '';
       let uploadedAfterImageUrl = project?.afterImageUrl || '';
 
-      // --- Direct Client-Side Uploads with Progress ---
+      // --- Direct Client-Side Uploads ---
 
       if (aiGeneratedThumbnail) {
         setUploadMessage('Uploading AI thumbnail...');
         const response = await fetch(aiGeneratedThumbnail);
         const blob = await response.blob();
         const file = new File([blob], 'thumbnail.png', { type: blob.type });
-        uploadedThumbnailUrl = await uploadFileWithProgress(file, 'project-thumbnails', setUploadProgress);
+        uploadedThumbnailUrl = await uploadFileWithProgress(file, 'project-thumbnails', (p) => setUploadProgress(p));
       } else if (thumbnailFile) {
         setUploadMessage('Uploading thumbnail...');
-        uploadedThumbnailUrl = await uploadFileWithProgress(thumbnailFile, 'project-thumbnails', setUploadProgress);
+        uploadedThumbnailUrl = await uploadFileWithProgress(thumbnailFile, 'project-thumbnails', (p) => setUploadProgress(p));
       }
 
       if (stillsFiles && stillsFiles.length > 0) {
@@ -145,45 +147,44 @@ export default function ProjectForm({ project }: ProjectFormProps) {
         for (let i = 0; i < stillsFiles.length; i++) {
           const file = stillsFiles[i];
           setUploadMessage(`Uploading still ${i + 1}/${stillsFiles.length}...`);
-          const percentage = ((i + 1) / stillsFiles.length) * 100;
-          const url = await uploadFileWithProgress(file, 'stills', () => setUploadProgress(percentage));
+          const url = await uploadFileWithProgress(file, 'stills', (p) => setUploadProgress(((i + p / 100) / stillsFiles.length) * 100));
           uploadedStillsUrls.push(url);
         }
       }
       
       if (beforeImageFile) {
         setUploadMessage('Uploading before image...');
-        uploadedBeforeImageUrl = await uploadFileWithProgress(beforeImageFile, 'color-grading', setUploadProgress);
+        uploadedBeforeImageUrl = await uploadFileWithProgress(beforeImageFile, 'color-grading', (p) => setUploadProgress(p));
       }
       
       if (afterImageFile) {
         setUploadMessage('Uploading after image...');
-        uploadedAfterImageUrl = await uploadFileWithProgress(afterImageFile, 'color-grading', setUploadProgress);
+        uploadedAfterImageUrl = await uploadFileWithProgress(afterImageFile, 'color-grading', (p) => setUploadProgress(p));
       }
       
       setUploadMessage('Saving project details...');
+      setUploadProgress(100);
       
-      // We are creating a new FormData object to pass to the server action.
-      // This new FormData will only contain the text fields and the URLs of the uploaded files, not the files themselves.
+      // CRITICAL: Create a NEW, lightweight FormData object for the server action
       const serverFormData = new FormData();
       serverFormData.append('id', project?.id || '');
-      serverFormData.append('title', currentFormData.get('title') as string);
-      serverFormData.append('description', currentFormData.get('description') as string);
-      serverFormData.append('date', currentFormData.get('date') as string);
+      serverFormData.append('title', title);
+      serverFormData.append('description', description);
+      serverFormData.append('date', date);
       serverFormData.append('category', category);
-
       serverFormData.append('thumbnail', uploadedThumbnailUrl);
       serverFormData.append('stills', JSON.stringify(uploadedStillsUrls));
       serverFormData.append('beforeImageUrl', uploadedBeforeImageUrl);
       serverFormData.append('afterImageUrl', uploadedAfterImageUrl);
-      serverFormData.append('youtubeVideoId', currentFormData.get('youtubeVideoId') as string || '');
+      serverFormData.append('youtubeVideoId', youtubeVideoId);
 
-
+      // Call the server action with the lightweight payload
       const result = await saveProject(serverFormData);
 
       if (result.success) {
         toast({ title: 'Success', description: result.message });
         router.push('/admin');
+        router.refresh(); // Force a refresh to show new data
       } else {
         throw new Error(result.message);
       }

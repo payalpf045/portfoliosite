@@ -38,7 +38,7 @@ const nextConfig: NextConfig = {
   },
   experimental: {
     serverActions: {
-      bodySizeLimit: '25mb',
+      bodySizeLimit: '2mb', // Reverted to a more standard limit
     },
   },
   // This is deprecated in Next.js 15 and functions is the new way
