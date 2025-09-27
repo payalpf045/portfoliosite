@@ -9,6 +9,10 @@ const PHOTOGRAPHY_KEY = 'photography_images';
 // --- Generic Data Access Functions ---
 
 async function getAll<T>(key: string): Promise<T[]> {
+  if (!process.env.KV_REST_API_URL || !process.env.KV_REST_API_TOKEN) {
+    console.log("Vercel KV environment variables not found, returning empty array. This is expected for local development if you haven't connected Vercel CLI.");
+    return [];
+  }
   const items = await kv.get<T[]>(key);
   return items || [];
 }
