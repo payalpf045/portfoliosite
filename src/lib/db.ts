@@ -8,7 +8,9 @@ import type { Project, PhotographyImage } from './definitions';
 export async function getProjects(): Promise<Project[]> {
   const { data, error } = await supabase
     .from('projects')
-    .select('*')
+    .select(
+      'id, title, description, category, thumbnail, date, "youtubeVideoId", stills, "beforeImageUrl", "afterImageUrl"'
+    )
     .order('date', { ascending: false });
 
   if (error) {
@@ -21,7 +23,9 @@ export async function getProjects(): Promise<Project[]> {
 export async function getProjectById(id: string): Promise<Project | undefined> {
   const { data, error } = await supabase
     .from('projects')
-    .select('*')
+    .select(
+      'id, title, description, category, thumbnail, date, "youtubeVideoId", stills, "beforeImageUrl", "afterImageUrl"'
+    )
     .eq('id', id)
     .single();
 
