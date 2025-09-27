@@ -36,6 +36,15 @@ const nextConfig: NextConfig = {
       }
     ],
   },
+  experimental: {
+    serverActions: {
+      bodySizeLimit: '25mb',
+    },
+  },
+  functions: {
+      // Allow more time for file uploads to complete
+      maxDuration: 120,
+  }
 };
 
 export default nextConfig;
