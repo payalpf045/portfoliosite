@@ -18,6 +18,11 @@ import { put, del } from '@vercel/blob';
 
 // --- File Handling Utility ---
 async function saveFile(file: File, folder: string): Promise<string> {
+  if (!process.env.BLOB_READ_WRITE_TOKEN) {
+    throw new Error(
+      'Vercel Blob token not found. File operations are disabled in local development without it.'
+    );
+  }
   if (!file) {
     throw new Error('No file provided to save.');
   }
@@ -32,6 +37,12 @@ async function saveFile(file: File, folder: string): Promise<string> {
 }
 
 async function deleteFile(fileUrl: string): Promise<void> {
+  if (!process.env.BLOB_READ_WRITE_TOKEN) {
+    console.log(
+      'Vercel Blob token not found. File deletion is disabled in local development without it.'
+    );
+    return;
+  }
   if (!fileUrl) return;
   try {
     await del(fileUrl);
