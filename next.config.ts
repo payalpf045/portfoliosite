@@ -30,7 +30,7 @@ const nextConfig: NextConfig = {
       },
       {
         protocol: 'https',
-        hostname: 'firebasestorage.googleapis.com',
+        hostname: '*.public.blob.vercel-storage.com',
         port: '',
         pathname: '/**',
       }

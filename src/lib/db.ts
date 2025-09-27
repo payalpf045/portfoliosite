@@ -1,96 +1,77 @@
 'use server';
 
-import fs from 'fs/promises';
-import path from 'path';
+import { kv } from '@vercel/kv';
 import type { Project, PhotographyImage } from './definitions';
 
-// Define paths to data files
-const dataDir = path.join(process.cwd(), 'src', 'data');
-const projectsFilePath = path.join(dataDir, 'projects.json');
-const photographyFilePath = path.join(dataDir, 'photography.json');
+const PROJECTS_KEY = 'projects';
+const PHOTOGRAPHY_KEY = 'photography_images';
 
 // --- Generic Data Access Functions ---
 
-async function readData<T>(filePath: string, defaultData: T[] = []): Promise<T[]> {
-  try {
-    const fileContent = await fs.readFile(filePath, 'utf-8');
-    if (fileContent.trim() === '') {
-      await fs.writeFile(filePath, JSON.stringify(defaultData, null, 2));
-      return defaultData;
-    }
-    return JSON.parse(fileContent);
-  } catch (error: any) {
-    if (error.code === 'ENOENT') {
-      await fs.mkdir(dataDir, { recursive: true });
-      await fs.writeFile(filePath, JSON.stringify(defaultData, null, 2));
-      return defaultData;
-    }
-    console.error(`Error reading data from ${filePath}:`, error);
-    throw new Error(`Could not read data from ${filePath}.`);
-  }
+async function getAll<T>(key: string): Promise<T[]> {
+  const items = await kv.get<T[]>(key);
+  return items || [];
 }
 
-async function writeData<T>(filePath: string, data: T[]): Promise<void> {
-  try {
-    await fs.mkdir(dataDir, { recursive: true });
-    await fs.writeFile(filePath, JSON.stringify(data, null, 2));
-  } catch (error) {
-    console.error(`Error writing data to ${filePath}:`, error);
-    throw new Error(`Could not write data to ${filePath}.`);
-  }
+async function getItemById<T extends { id: string }>(key: string, id: string): Promise<T | undefined> {
+  const items = await getAll<T>(key);
+  return items.find((item) => item.id === id);
 }
+
+async function saveItem<T extends { id: string }>(key: string, item: T): Promise<void> {
+  const items = await getAll<T>(key);
+  const existingIndex = items.findIndex((i) => i.id === item.id);
+
+  if (existingIndex > -1) {
+    items[existingIndex] = item;
+  } else {
+    items.unshift(item);
+  }
+  await kv.set(key, items);
+}
+
+async function deleteItemById<T extends { id: string }>(key: string, id: string): Promise<void> {
+  let items = await getAll<T>(key);
+  items = items.filter((item) => item.id !== id);
+  await kv.set(key, items);
+}
+
 
 // --- Project-Specific Functions ---
 
 export async function getProjects(): Promise<Project[]> {
-  const projects = await readData<Project>(projectsFilePath);
+  const projects = await getAll<Project>(PROJECTS_KEY);
   return projects.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
 }
 
 export async function getProjectById(id: string): Promise<Project | undefined> {
-  const projects = await getProjects();
-  return projects.find((p) => p.id === id);
+  return getItemById<Project>(PROJECTS_KEY, id);
 }
 
 export async function saveProject(project: Project): Promise<void> {
-  const projects = await getProjects();
-  const existingIndex = projects.findIndex((p) => p.id === project.id);
-
-  if (existingIndex > -1) {
-    projects[existingIndex] = project;
-  } else {
-    projects.unshift(project);
-  }
-  await writeData(projectsFilePath, projects);
+  return saveItem<Project>(PROJECTS_KEY, project);
 }
 
 export async function deleteProjectById(id: string): Promise<void> {
-  let projects = await getProjects();
-  projects = projects.filter((p) => p.id !== id);
-  await writeData(projectsFilePath, projects);
+  return deleteItemById<Project>(PROJECTS_KEY, id);
 }
 
 
 // --- Photography-Specific Functions ---
 
 export async function getPhotographyImages(): Promise<PhotographyImage[]> {
-  const images = await readData<PhotographyImage>(photographyFilePath);
+  const images = await getAll<PhotographyImage>(PHOTOGRAPHY_KEY);
   return images.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
 }
 
 export async function getPhotographyImageById(id: string): Promise<PhotographyImage | undefined> {
-  const images = await getPhotographyImages();
-  return images.find(img => img.id === id);
+  return getItemById<PhotographyImage>(PHOTOGRAPHY_KEY, id);
 }
 
 export async function savePhotographyImage(image: PhotographyImage): Promise<void> {
-  const images = await getPhotographyImages();
-  images.unshift(image);
-  await writeData(photographyFilePath, images);
+  return saveItem<PhotographyImage>(PHOTOGRAPHY_KEY, image);
 }
 
 export async function deletePhotographyImageById(id: string): Promise<void> {
-  let images = await getPhotographyImages();
-  images = images.filter((img) => img.id !== id);
-  await writeData(photographyFilePath, images);
+  return deleteItemById<PhotographyImage>(PHOTOGRAPHY_KEY, id);
 }

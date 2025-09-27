@@ -3,8 +3,6 @@
 import { z } from 'zod';
 import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
-import fs from 'fs/promises';
-import path from 'path';
 import crypto from 'crypto';
 import {
   saveProject as dbSaveProject,
@@ -16,37 +14,31 @@ import {
 } from './db';
 import type { Project, PhotographyImage } from './definitions';
 import { generateProjectThumbnail } from '@/ai/flows/generate-project-thumbnail';
-import { storage } from '@/lib/firebase';
-import { ref, uploadBytes, getDownloadURL, deleteObject } from 'firebase/storage';
-
+import { put, del } from '@vercel/blob';
 
 // --- File Handling Utility ---
-async function saveFile(file: File, uploadDir: string = 'uploads'): Promise<string> {
+async function saveFile(file: File, folder: string): Promise<string> {
   if (!file) {
     throw new Error('No file provided to save.');
   }
-  const fileBuffer = await file.arrayBuffer();
-  const fileExtension = path.extname(file.name);
-  const fileName = `${uploadDir}/${crypto.randomBytes(16).toString('hex')}${fileExtension}`;
-  
-  const storageRef = ref(storage, fileName);
-  await uploadBytes(storageRef, fileBuffer, { contentType: file.type });
-  const downloadUrl = await getDownloadURL(storageRef);
+  const fileExtension = file.name.split('.').pop();
+  const fileName = `${folder}/${crypto.randomBytes(16).toString('hex')}.${fileExtension}`;
 
-  return downloadUrl;
+  const blob = await put(fileName, file, {
+    access: 'public',
+  });
+
+  return blob.url;
 }
 
 async function deleteFile(fileUrl: string): Promise<void> {
-  if (!fileUrl || !fileUrl.includes('firebasestorage.googleapis.com')) {
-    return; // Not a firebase storage URL, so we can't delete it.
-  }
+  if (!fileUrl) return;
   try {
-    const fileRef = ref(storage, fileUrl);
-    await deleteObject(fileRef);
+    await del(fileUrl);
   } catch (error: any) {
-    // It's okay if the file doesn't exist.
-    if (error.code !== 'storage/object-not-found') {
-      console.error(`Failed to delete file at ${fileUrl}:`, error);
+    // Vercel Blob's del throws an error if the file doesn't exist, so we can ignore not found errors.
+    if (error.code !== 'not_found') {
+        console.error(`Failed to delete file at ${fileUrl}:`, error);
     }
   }
 }
@@ -116,7 +108,7 @@ async function saveFilmProject(formData: FormData) {
   const { id, ...data } = validatedFields.data;
   const projectId = id || crypto.randomBytes(8).toString('hex');
   
-  const youtubeId = data.youtubeVideoId ? data.youtubeVideoId.trim() : '';
+  const youtubeId = data.youtubeVideoId ? data.youtubeVideoId.trimEnd() : '';
 
   try {
     const existingProject = id ? await getProjectById(id) : undefined;
@@ -164,6 +156,9 @@ async function saveFilmProject(formData: FormData) {
   }
   revalidatePath('/admin');
   revalidatePath(`/project/${projectId}`);
+  revalidatePath('/');
+  revalidatePath('/film');
+  revalidatePath('/color-grading');
   redirect('/admin');
 }
 
@@ -221,6 +216,9 @@ async function saveColorGradingProject(formData: FormData) {
     }
     revalidatePath('/admin');
     revalidatePath(`/project/${projectId}`);
+    revalidatePath('/');
+    revalidatePath('/film');
+    revalidatePath('/color-grading');
     redirect('/admin');
 }
 
@@ -230,24 +228,29 @@ export async function deleteProject(formData: FormData) {
   try {
     const project = await getProjectById(id);
     if(project) {
-        // Delete associated files from Firebase Storage
-        const filesToDelete: string[] = [];
-        if (project.thumbnail) filesToDelete.push(project.thumbnail);
-        if (project.beforeImageUrl) filesToDelete.push(project.beforeImageUrl);
-        if (project.afterImageUrl) filesToDelete.push(project.afterImageUrl);
+        // Delete associated files from Vercel Blob
+        const filesToDelete: (string | undefined)[] = [];
+        filesToDelete.push(project.thumbnail);
+        filesToDelete.push(project.beforeImageUrl);
+        filesToDelete.push(project.afterImageUrl);
         if (project.stills) filesToDelete.push(...project.stills);
 
         for (const fileUrl of filesToDelete) {
+          if (fileUrl) {
             await deleteFile(fileUrl);
+          }
         }
     }
     await deleteProjectById(id);
   } catch (e) {
     // handle error
     console.error("Failed to delete project:", e)
+    // We can show an error to the user here if needed
   }
   revalidatePath('/admin');
   revalidatePath('/');
+  revalidatePath('/film');
+  revalidatePath('/color-grading');
 }
 
 // --- Photography Actions ---
