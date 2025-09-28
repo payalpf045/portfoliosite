@@ -159,16 +159,16 @@ export async function deleteProject(formData: FormData) {
 }
 
 // --- Photography Actions ---
-const MAX_FILE_SIZE = 25 * 1024 * 1024; // 25MB
-const ACCEPTED_IMAGE_TYPES = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'];
+const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50MB
+const ACCEPTED_IMAGE_TYPES = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp', 'image/gif'];
 
 const imageSchema = z.object({
   image: z
     .any()
-    .refine((file) => file?.size <= MAX_FILE_SIZE, `Max image size is 25MB.`)
+    .refine((file) => file?.size <= MAX_FILE_SIZE, `Max image size is 50MB.`)
     .refine(
       (file) => ACCEPTED_IMAGE_TYPES.includes(file?.type),
-      'Only .jpg, .jpeg, .png and .webp formats are supported.'
+      'Only .jpg, .jpeg, .png, .gif and .webp formats are supported.'
     ),
   title: z.string().min(1, 'Title is required.'),
 });
@@ -251,7 +251,10 @@ export async function createSignedUploadUrl(path: string, bucket: string, conten
   try {
     const { data, error } = await supabase.storage
       .from(bucket)
-      .createSignedUploadUrl(path);
+      .createSignedUploadUrl(path, {
+          // Set a high expiresIn value to accommodate large uploads
+          expiresIn: 60 * 60, // 60 minutes
+      });
 
     if (error) {
       throw error;
